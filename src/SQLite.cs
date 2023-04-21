@@ -1614,7 +1614,8 @@ namespace SQLite
 		/// </summary>
 		/// <param name="objects">
 		/// An <see cref="IEnumerable"/> of the objects to insert.
-		/// <param name="runInTransaction"/>
+		/// </param>
+		/// <param name="runInTransaction">
 		/// A boolean indicating if the inserts should be wrapped in a transaction.
 		/// </param>
 		/// <returns>
@@ -2517,7 +2518,7 @@ namespace SQLite
 	{
 	}
 
-	[AttributeUsage (AttributeTargets.Enum)]
+	[AttributeUsage (AttributeTargets.Enum | AttributeTargets.Property | AttributeTargets.Field)]
 	public class StoreAsTextAttribute : Attribute
 	{
 	}
@@ -2740,7 +2741,9 @@ namespace SQLite
 				IsNullable = !(IsPK || Orm.IsMarkedNotNull (member));
 				MaxStringLength = Orm.MaxStringLength (member);
 
-				StoreAsText = memberType.GetTypeInfo ().CustomAttributes.Any (x => x.AttributeType == typeof (StoreAsTextAttribute));
+				var classStoreAsText = memberType.GetTypeInfo ().CustomAttributes.Any (x => x.AttributeType == typeof (StoreAsTextAttribute));
+				var memberStoreAsText = member.GetCustomAttributes().Any(x => x is StoreAsTextAttribute);
+				StoreAsText = classStoreAsText || memberStoreAsText;
 			}
 
 			public Column (PropertyInfo member, CreateFlags createFlags = CreateFlags.None)
@@ -2769,12 +2772,33 @@ namespace SQLite
 
 			public object GetValue (object obj)
 			{
-				if(_member is PropertyInfo propy)
-					return propy.GetValue(obj);
-				else if(_member is FieldInfo field)
-					return field.GetValue(obj);
-				else
-					throw new InvalidProgramException("unreachable condition");
+				if (_member is PropertyInfo propy)
+				{
+					var objValue = propy.GetValue(obj);
+					if (propy.PropertyType.IsEnum && StoreAsText)
+					{
+						var enumInfo = EnumCache.GetInfo(propy.PropertyType);
+						var enumIntValue = Convert.ToInt32(objValue);
+						return enumInfo.EnumValues[enumIntValue];
+					}
+
+					return objValue;
+				}
+				
+				if (_member is FieldInfo field)
+				{
+					var objValue = field.GetValue(obj);
+					if (field.FieldType.IsEnum && StoreAsText)
+					{
+						var enumInfo = EnumCache.GetInfo(field.FieldType);
+						var enumIntValue = Convert.ToInt32(objValue);
+						return enumInfo.EnumValues[enumIntValue];
+					}
+
+					return objValue;
+				}
+				
+				throw new InvalidProgramException("unreachable condition");
 			}
 
 			private static Type GetMemberType(MemberInfo m)
@@ -2802,16 +2826,9 @@ namespace SQLite
 			var typeInfo = type.GetTypeInfo ();
 
 			IsEnum = typeInfo.IsEnum;
-
-			if (IsEnum) {
-				StoreAsText = typeInfo.CustomAttributes.Any (x => x.AttributeType == typeof (StoreAsTextAttribute));
-
-				if (StoreAsText) {
-					EnumValues = new Dictionary<int, string> ();
-					foreach (object e in Enum.GetValues (type)) {
-						EnumValues[Convert.ToInt32 (e)] = e.ToString ();
-					}
-				}
+			EnumValues = new Dictionary<int, string> ();
+			foreach (object e in Enum.GetValues (type)) {
+				EnumValues[Convert.ToInt32 (e)] = e.ToString ();
 			}
 		}
 
@@ -2820,6 +2837,7 @@ namespace SQLite
 		public bool StoreAsText { get; private set; }
 
 		public Dictionary<int, string> EnumValues { get; private set; }
+		
 	}
 
 	static class EnumCache
